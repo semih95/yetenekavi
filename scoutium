@@ -1,0 +1,343 @@
+######################################
+# kütüphaneler
+######################################
+import numpy as np
+import seaborn as sns
+from matplotlib import pyplot as plt
+import pandas as pd
+import warnings
+from sklearn.exceptions import ConvergenceWarning
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import StandardScaler
+from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier, AdaBoostClassifier
+from sklearn.svm import SVC
+from sklearn.model_selection import cross_val_score, GridSearchCV, cross_validate
+
+######################################
+# ayarlar
+######################################
+
+pd.set_option("display.max_columns", None)
+pd.set_option("display.width", 500)
+
+
+# FONKSİYONLAR
+
+def check_df(dataframe, head=5):
+    print("##################### Shape #####################")
+    print(dataframe.shape)
+    print("##################### Types #####################")
+    print(dataframe.dtypes)
+    print("##################### Head #####################")
+    print(dataframe.head(head))
+    print("##################### Tail #####################")
+    print(dataframe.tail(head))
+    print("##################### NA #####################")
+    print(dataframe.isnull().sum())
+    print("##################### Quantiles #####################")
+    print(dataframe.quantile([0, 0.05, 0.50, 0.95, 0.99, 1]).T)
+def cat_summary(dataframe, col_name, plot=False):
+    print(pd.DataFrame({col_name: dataframe[col_name].value_counts(),
+                        "Ratio": 100 * dataframe[col_name].value_counts() / len(dataframe)}))
+    print("##########################################")
+    if plot:
+        sns.countplot(x=dataframe[col_name], data=dataframe)
+        plt.show(block=True)
+def grab_col_names(dataframe, cat_th=34, car_th=50):
+    """
+
+    Veri setindeki kategorik, numerik ve kategorik fakat kardinal değişkenlerin isimlerini verir.
+    Not: Kategorik değişkenlerin içerisine numerik görünümlü kategorik değişkenler de dahildir.
+
+    Parameters
+    ------
+        dataframe: dataframe
+                Değişken isimleri alınmak istenilen dataframe
+        cat_th: int, optional
+                numerik fakat kategorik olan değişkenler için sınıf eşik değeri
+        car_th: int, optinal
+                kategorik fakat kardinal değişkenler için sınıf eşik değeri
+
+    Returns
+    ------
+        cat_cols: list
+                Kategorik değişken listesi
+        num_cols: list
+                Numerik değişken listesi
+        cat_but_car: list
+                Kategorik görünümlü kardinal değişken listesi
+
+    Examples
+    ------
+        import seaborn as sns
+        df = sns.load_dataset("iris")
+        print(grab_col_names(df))
+
+
+    Notes
+    ------
+        cat_cols + num_cols + cat_but_car = toplam değişken sayısı
+        num_but_cat cat_cols'un içerisinde.
+        Return olan 3 liste toplamı toplam değişken sayısına eşittir: cat_cols + num_cols + cat_but_car = değişken sayısı
+
+    """
+
+    # cat_cols, cat_but_car
+    cat_cols = [col for col in dataframe.columns if dataframe[col].dtypes == "O"]
+    num_but_cat = [col for col in dataframe.columns if dataframe[col].nunique() < cat_th and
+                   dataframe[col].dtypes != "O"]
+    cat_but_car = [col for col in dataframe.columns if dataframe[col].nunique() > car_th and
+                   dataframe[col].dtypes == "O"]
+    cat_cols = cat_cols + num_but_cat
+    cat_cols = [col for col in cat_cols if col not in cat_but_car]
+
+    # num_cols
+    num_cols = [col for col in dataframe.columns if dataframe[col].dtypes != "O"]
+    num_cols = [col for col in num_cols if col not in num_but_cat]
+
+    # print(f"Observations: {dataframe.shape[0]}")
+    # print(f"Variables: {dataframe.shape[1]}")
+    # print(f'cat_cols: {len(cat_cols)}')
+    # print(f'num_cols: {len(num_cols)}')
+    # print(f'cat_but_car: {len(cat_but_car)}')
+    # print(f'num_but_cat: {len(num_but_cat)}')
+    return cat_cols, num_cols, cat_but_car
+def num_summary(dataframe, numerical_col, plot=False):
+    quantiles = [0.05, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.99]
+    print(dataframe[numerical_col].describe(quantiles).T)
+
+    if plot:
+        dataframe[numerical_col].hist(bins=20)
+        plt.xlabel(numerical_col)
+        plt.title(numerical_col)
+        plt.show(block=True)
+
+
+# Adım1:  scoutium_attributes.csv ve scoutium_potential_labels.csv dosyalarını okutunuz.
+
+
+df1 = pd.read_csv(r"C:\Users\Semih\OneDrive\Masaüstü\python kursu\6 - machine learning\3. hafta ödevi\scoutium_attributes.csv", sep=";")
+df2 = pd.read_csv(r"C:\Users\Semih\OneDrive\Masaüstü\python kursu\6 - machine learning\3. hafta ödevi\scoutium_potential_labels.csv", sep=";")
+
+# Adım2:  Okutmuş olduğumuz csv dosyalarını merge fonksiyonunu kullanarak birleştiriniz. ("task_response_id", 'match_id', 'evaluator_id' "player_id" 4 adet değişken üzerinden birleştirme işlemini gerçekleştiriniz.)
+
+
+df = pd.merge(df1, df2, on=['task_response_id', 'match_id', 'evaluator_id', 'player_id'])
+
+check_df(df)
+
+# Adım3:  position_id içerisindeki Kaleci (1) sınıfını veri setinden kaldırınız
+
+df = df.loc[~(df["position_id"] == 1)]
+
+# Adım4: potential_label içerisindeki below_average sınıfını veri setinden kaldırınız.( below_average sınıfı tüm verisetinin %1'ini oluşturur)
+
+cat_summary(df,"potential_label")
+
+df = df.loc[~(df["potential_label"] == "below_average")]
+
+for i in df.columns:
+    print(i , df[i].nunique())
+
+df["attribute_value"].unique()
+# [ 56.,  67.,  45.,  34.,  78., 100.,  89.,  23.,  12.,   1.]
+
+
+# Adım5: Oluşturduğunuz veri setinden “pivot_table” fonksiyonunu kullanarak bir tablo oluşturunuz. Bu pivot table'da her satırda bir oyuncu olacak şekilde manipülasyon yapınız.
+
+
+pivot = pd.pivot_table(df, values="attribute_value", index=["player_id", "position_id", "potential_label"], columns=["attribute_id"])
+pivot.head()
+pivot= pivot.reset_index()
+pivot.head()
+
+pivot.columns = pivot.columns.astype(str)
+
+# Adım6:  Label Encoder fonksiyonunu kullanarak “potential_label” kategorilerini (average, highlighted) sayısal olarak ifade ediniz.
+
+labelencoder = LabelEncoder()
+pivot["potential_label"] = labelencoder.fit_transform(pivot["potential_label"])
+pivot.head()
+labelencoder.inverse_transform([0, 1])
+
+
+pivot.info()
+
+pivot["player_id"] = pivot["player_id"].astype(str)
+pivot["position_id"] = pivot["position_id"].astype(str)
+
+# Adım7:  Sayısal değişken kolonlarını “num_cols” adıyla bir listeye atayınız.
+
+num_cols = [col for col in pivot.columns if pivot[col].dtypes == "float"]
+
+# Adım8:  Kaydettiğiniz bütün “num_cols” değişkenlerindeki veriyi ölçeklendirmek için StandardScaler uygulayınız.
+
+scaled = StandardScaler().fit_transform(pivot[num_cols])
+pivot[num_cols] = pd.DataFrame(scaled, columns=pivot[num_cols].columns)
+pivot.head()
+
+
+# Adım9: Elimizdeki veri seti üzerinden minimum hata ile futbolcuların potansiyel etiketlerini tahmin eden bir makine öğrenmesi modeli geliştiriniz. (Roc_auc, f1, precision, recall, accuracy metriklerini yazdırınız.)
+
+
+a = ["potential_label","player_id",]
+
+
+y = pivot["potential_label"]
+X = pivot.drop(pivot[a], axis=1)
+
+from sklearn.decomposition import PCA
+pca = PCA().fit(X)
+plt.plot(np.cumsum(pca.explained_variance_ratio_))
+plt.xlabel("Bileşen Sayısını")
+plt.ylabel("Kümülatif Varyans Oranı")
+plt.show()
+
+
+pca = PCA(n_components=6)
+pca_fit = pca.fit_transform(X)
+
+pca.explained_variance_ratio_
+np.cumsum(pca.explained_variance_ratio_)
+
+
+final_df = pd.concat([pd.DataFrame(pca_fit, columns=["PC1","PC2","PC3","PC4","PC5","PC6"]),
+                      pivot[["potential_label"]]], axis=1)
+y = final_df["potential_label"]
+X = final_df.drop("potential_label", axis=1)
+final_df.head()
+
+def base_models(X, y, scoring="roc_auc"):
+    print("Base Models....")
+    classifiers = [('LR', LogisticRegression()),
+                   ('KNN', KNeighborsClassifier()),
+                   ("SVC", SVC()),
+                   ("CART", DecisionTreeClassifier()),
+                   ("RF", RandomForestClassifier()),
+                   ('Adaboost', AdaBoostClassifier()),
+                   ('GBM', GradientBoostingClassifier()),
+                   ('XGBoost', XGBClassifier(use_label_encoder=False, eval_metric='logloss')),
+                   ('LightGBM', LGBMClassifier(force_col_wise=True, n_estimators= 50 , verbosity = -1)),
+                   # ('CatBoost', CatBoostClassifier(verbose=False))
+                   ]
+
+
+    for name, classifier in classifiers:
+        cv_results = cross_validate(classifier, X, y, cv=3, scoring=scoring)
+        print(f"{scoring}: {round(cv_results['test_score'].mean(), 4)} ({name}) ")
+
+
+
+
+
+
+base_models(X, y, scoring="roc_auc")
+
+# roc_auc: 0.8167 (LR)
+# roc_auc: 0.7719 (KNN)
+# roc_auc: 0.8618 (SVC)
+# roc_auc: 0.7201 (CART)
+# roc_auc: 0.892 (RF)
+# roc_auc: 0.7753 (Adaboost)
+# roc_auc: 0.8529 (GBM)
+# roc_auc: 0.8444 (XGBoost)
+# roc_auc: 0.8527 (LightGBM)
+
+base_models(X, y, scoring="f1")
+# f1: 0.5728 (LR)
+# f1: 0.4784 (KNN)
+# f1: 0.3998 (SVC)
+# f1: 0.4873 (CART)
+# f1: 0.6284 (RF)
+# f1: 0.5571 (Adaboost)
+# f1: 0.5765 (GBM)
+# f1: 0.6068 (XGBoost)
+# f1: 0.607 (LightGBM)
+
+
+base_models(X, y, scoring="precision")
+
+# precision: 0.7492 (LR)
+# precision: 0.9583 (KNN)
+# precision: 1.0 (SVC)
+# precision: 0.5297 (CART)
+# precision: 0.8296 (RF)
+# precision: 0.5951 (Adaboost)
+# precision: 0.714 (GBM)
+# precision: 0.7123 (XGBoost)
+# precision: 0.7646 (LightGBM)
+
+
+base_models(X, y, scoring="recall")
+
+# recall: 0.4815 (LR)
+# recall: 0.3226 (KNN)
+# recall: 0.2505 (SVC)
+# recall: 0.5361 (CART)
+# recall: 0.463 (RF)
+# recall: 0.5517 (Adaboost)
+# recall: 0.5175 (GBM)
+# recall: 0.5351 (XGBoost)
+# recall: 0.5166 (LightGBM)
+
+
+base_models(X, y, scoring="accuracy")
+
+
+# accuracy: 0.856 (LR)
+# accuracy: 0.8561 (KNN)
+# accuracy: 0.845 (SVC)
+# accuracy: 0.8009 (CART)
+# accuracy: 0.8634 (RF)
+# accuracy: 0.823 (Adaboost)
+# accuracy: 0.8488 (GBM)
+# accuracy: 0.8562 (XGBoost)
+# accuracy: 0.8635 (LightGBM)
+
+# Adım10: Değişkenlerin önem düzeyini belirten feature_importance fonksiyonunu kullanarak özelliklerin sıralamasını çizdiriniz
+
+def plot_importance(model, features, num=len(X), save=False):
+    feature_imp = pd.DataFrame({'Value': model.feature_importances_, 'Feature': features.columns})
+    plt.figure(figsize=(10, 10))
+    sns.set(font_scale=1)
+    sns.barplot(x="Value", y="Feature", data=feature_imp.sort_values(by="Value",
+                                                                     ascending=False)[0:num])
+    plt.title(model)
+    plt.tight_layout()
+    plt.show()
+    if save:
+        plt.savefig('importances.png')
+
+
+
+
+gbm = GradientBoostingClassifier( random_state = 42).fit(X,y)
+lgbm = LGBMClassifier( random_state = 42 , verbosity = -1).fit(X,y)
+ada = AdaBoostClassifier().fit(X,y)
+xgb = XGBClassifier(use_label_encoder=False, eval_metric='logloss').fit(X,y)
+lr = LogisticRegression().fit(X,y)
+knn = KNeighborsClassifier().fit(X,y)
+svc = SVC().fit(X,y)
+cart = DecisionTreeClassifier().fit(X,y)
+rf = RandomForestClassifier().fit(X,y)
+
+models2 = []
+models2.append(('LGMB', lgbm))
+models2.append(('GBM', gbm))
+models2.append(('Adaboost', ada))
+models2.append(('XGBoost', xgb))
+models2.append(('CART', cart))
+models2.append(('RF', rf))
+# models2.append(('LR', lr))
+# models2.append(('KNN', knn))
+# models2.append(('SVC', svc))
+
+
+
+for name, model in models2:
+    plot_importance(model,X,10)
